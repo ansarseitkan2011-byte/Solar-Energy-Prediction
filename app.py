@@ -9,7 +9,7 @@ import os
 # --- 1. КОНФИГУРАЦИЯ СТРАНИЦЫ ---
 st.set_page_config(
     page_title="Прогноз Солнечной Энергии",
-    page_page_icon="☀️",
+    page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -17,12 +17,9 @@ st.set_page_config(
 # --- 2. КАСТОМНЫЙ CSS СТИЛЬ ---
 st.markdown("""
     <style>
-    /* Главный фон и отступы */
     .main {
         background-color: #f8fafc;
     }
-    
-    /* Карточки метрик */
     .metric-card {
         background-color: #ffffff;
         border-radius: 12px;
@@ -42,8 +39,6 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
-    
-    /* Заголовки */
     .header-title {
         color: #1e293b;
         font-weight: 800;
@@ -60,8 +55,7 @@ st.markdown("""
 # --- 3. ЗАГРУЗКА МОДЕЛИ ---
 @st.cache_resource
 def load_model():
-    # Поиск возможных имен файлов модели
-    possible_names = ['model.joblib', 'solar_model.pkl', 'model.pkl', 'solar_energy_model.joblib']
+    possible_names = ['model.pkl', 'model.joblib', 'solar_model.pkl']
     for name in possible_names:
         if os.path.exists(name):
             try:
@@ -76,13 +70,11 @@ model, model_filename = load_model()
 st.sidebar.image("https://cdn-icons-png.flaticon.com/512/869/869869.png", width=70)
 st.sidebar.title("☀️ Параметры системы")
 
-# Быстрые пресеты
 preset = st.sidebar.selectbox(
     "Загрузить пресет погоды:",
     ["Пользовательские настройки", "Ясный летний день", "Пасмурный день", "Жаркий полдень"]
 )
 
-# Дефолтные значения по умолчанию
 default_temp = 22.0
 default_rad = 750.0
 default_hum = 45.0
@@ -106,7 +98,6 @@ st.sidebar.subheader("⚙️ Характеристики станции")
 capacity_kw = st.sidebar.number_input("Установленная мощность станций (кВт)", 1.0, 1000.0, float(default_cap), 1.0)
 
 # --- 5. РАСЧЕТ ПРОГНОЗА ---
-# Подготовка входного датафрейма для модели
 input_df = pd.DataFrame({
     'solar_radiation': [solar_rad],
     'temperature': [temp],
@@ -114,21 +105,16 @@ input_df = pd.DataFrame({
     'cloud_cover': [cloud_cover]
 })
 
-# Если модель загружена — используем её, иначе применяем физ-модель
 if model is not None:
     try:
-        # Проверяем количество фичей в модели
         predicted_power = model.predict(input_df)[0]
     except Exception:
-        # Если имена колонок не совпали с теми, на которых обучалась модель
         predicted_power = model.predict(input_df.values)[0]
 else:
-    # Резервный физический алгоритм расчёта (если файл модели не найден)
-    temp_efficiency = 1.0 - max(0.0, (temp - 25.0) * 0.004) # Потеря 0.4% на градус выше 25C
+    temp_efficiency = 1.0 - max(0.0, (temp - 25.0) * 0.004)
     cloud_loss = 1.0 - (cloud_cover / 100.0 * 0.75)
     predicted_power = capacity_kw * (solar_rad / 1000.0) * temp_efficiency * cloud_loss
 
-# Ограничиваем прогнозируемое значение физическими рамками
 predicted_power = max(0.0, min(predicted_power, capacity_kw * 1.05))
 efficiency_pct = (predicted_power / capacity_kw) * 100 if capacity_kw > 0 else 0
 
@@ -139,11 +125,10 @@ st.markdown("<p class='header-subtitle'>Система прогнозирова�
 if model_filename:
     st.success(f"Загружена модель машинного обучения: `{model_filename}`")
 else:
-    st.info("Используется базовый расчетный модуль. Загрузите файл `model.joblib` в корень репозитория для активации ML-модели.")
+    st.info("Используется базовый расчетный модуль.")
 
 st.markdown("---")
 
-# Метрики в верхней панели
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
@@ -163,7 +148,7 @@ with col2:
     """, unsafe_allow_html=True)
 
 with col3:
-    daily_est = predicted_power * 5.2 # Средний эквивалент часов
+    daily_est = predicted_power * 5.2
     st.markdown(f"""
         <div class='metric-card'>
             <div class='metric-label'>Оценка за день</div>
@@ -172,7 +157,7 @@ with col3:
     """, unsafe_allow_html=True)
 
 with col4:
-    co2_saved = daily_est * 0.5 # ~0.5 кг CO2 на кВт·ч
+    co2_saved = daily_est * 0.5
     st.markdown(f"""
         <div class='metric-card'>
             <div class='metric-label'>Экономия CO₂ / день</div>
@@ -186,7 +171,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 tab1, tab2, tab3 = st.tabs(["📊 Индикатор Мощности", "📈 Суточный Профиль", "🔍 Анализ Факторов"])
 
 with tab1:
-    # Спидометр (Gauge Chart)
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = predicted_power,
@@ -215,9 +199,7 @@ with tab1:
     st.plotly_chart(fig_gauge, use_container_width=True)
 
 with tab2:
-    # Симуляция суточного профиля выработки
     hours = np.arange(0, 24)
-    # Синусоидальная модель инсоляции по часам суток
     sun_profile = np.maximum(0, np.sin((hours - 6) * np.pi / 12))
     hourly_power = predicted_power * sun_profile
     
@@ -242,7 +224,6 @@ with tab2:
     st.plotly_chart(fig_line, use_container_width=True)
 
 with tab3:
-    # Зависимость генерации от температуры при текущей радиации
     temp_range = np.linspace(-10, 45, 50)
     power_vs_temp = []
     
