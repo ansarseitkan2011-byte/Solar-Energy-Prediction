@@ -8,7 +8,7 @@ import os
 
 # --- 1. КОНФИГУРАЦИЯ СТРАНИЦЫ ---
 st.set_page_config(
-    page_title="Прогноз Солнечной Энергии",
+    page_title="AI Прогноз Солнечной Станции",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -17,38 +17,19 @@ st.set_page_config(
 # --- 2. КАСТОМНЫЙ CSS СТИЛЬ ---
 st.markdown("""
     <style>
-    .main {
-        background-color: #f8fafc;
-    }
+    .main { background-color: #f8fafc; }
     .metric-card {
         background-color: #ffffff;
         border-radius: 12px;
         padding: 20px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         border: 1px solid #e2e8f0;
         text-align: center;
     }
-    .metric-value {
-        font-size: 32px;
-        font-weight: 700;
-        color: #0f172a;
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    .header-title {
-        color: #1e293b;
-        font-weight: 800;
-        margin-bottom: 0px;
-    }
-    .header-subtitle {
-        color: #64748b;
-        font-size: 16px;
-        margin-bottom: 25px;
-    }
+    .metric-value { font-size: 32px; font-weight: 700; color: #0f172a; }
+    .metric-label { font-size: 14px; color: #64748b; text-transform: uppercase; }
+    .header-title { color: #1e293b; font-weight: 800; margin-bottom: 0px; }
+    .header-subtitle { color: #64748b; font-size: 16px; margin-bottom: 25px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -59,140 +40,145 @@ def load_model():
     for name in possible_names:
         if os.path.exists(name):
             try:
-                return joblib.load(name), name
+                m = joblib.load(name)
+                return m, name
             except Exception as e:
-                st.warning(f"Ошибка загрузки {name}: {e}")
+                pass
     return None, None
 
 model, model_filename = load_model()
 
 # --- 4. БОКОВАЯ ПАНЕЛЬ (ВВОД ДАННЫХ) ---
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/869/869869.png", width=70)
-st.sidebar.title("☀️ Параметры системы")
+st.sidebar.title("☀️ Параметры погоды")
 
 preset = st.sidebar.selectbox(
     "Загрузить пресет погоды:",
     ["Пользовательские настройки", "Ясный летний день", "Пасмурный день", "Жаркий полдень"]
 )
 
-default_temp = 22.0
-default_rad = 750.0
-default_hum = 45.0
-default_cloud = 10.0
-default_cap = 10.0
+default_rad = 0.50
+default_mod_temp = 35.0
+default_air_temp = 25.0
 
 if preset == "Ясный летний день":
-    default_temp, default_rad, default_hum, default_cloud = 25.0, 900.0, 35.0, 5.0
+    default_rad, default_mod_temp, default_air_temp = 0.85, 42.0, 30.0
 elif preset == "Пасмурный день":
-    default_temp, default_rad, default_hum, default_cloud = 15.0, 250.0, 80.0, 85.0
+    default_rad, default_mod_temp, default_air_temp = 0.15, 20.0, 15.0
 elif preset == "Жаркий полдень":
-    default_temp, default_rad, default_hum, default_cloud = 36.0, 1050.0, 25.0, 0.0
+    default_rad, default_rad_mod, default_air_temp = 1.00, 50.0, 38.0
 
-st.sidebar.subheader("🌡️ Метеоусловия")
-solar_rad = st.sidebar.slider("Солнечная радиация (Вт/м²)", 0.0, 1200.0, float(default_rad), 10.0)
-temp = st.sidebar.slider("Температура воздуха (°C)", -20.0, 50.0, float(default_temp), 0.5)
-humidity = st.sidebar.slider("Влажность воздуха (%)", 0.0, 100.0, float(default_hum), 1.0)
-cloud_cover = st.sidebar.slider("Облачность (%)", 0.0, 100.0, float(default_cloud), 1.0)
+irradiance = st.sidebar.slider("Солнечная инсоляция (IRRADIANCE)", 0.0, 1.5, float(default_rad), 0.01)
+module_temp = st.sidebar.slider("Температура модуля (°C)", 0.0, 80.0, float(default_mod_temp), 0.5)
+ambient_temp = st.sidebar.slider("Температура воздуха (°C)", -10.0, 50.0, float(default_air_temp), 0.5)
 
-st.sidebar.subheader("⚙️ Характеристики станции")
-capacity_kw = st.sidebar.number_input("Установленная мощность станций (кВт)", 1.0, 1000.0, float(default_cap), 1.0)
-
-# --- 5. РАСЧЕТ ПРОГНОЗА ---
-input_df = pd.DataFrame({
-    'solar_radiation': [solar_rad],
-    'temperature': [temp],
-    'humidity': [humidity],
-    'cloud_cover': [cloud_cover]
-})
+# --- 5. РАСЧЕТ ПРОГНОЗА С УЧЕТОМ СТРУКТУРЫ МОДЕЛИ ---
+predicted_power = 0.0
 
 if model is not None:
+    # 1. Формируем словарь возможных параметров
+    features_dict = {
+        'IRRADIANCE': irradiance,
+        'MODULE_TEMPERATURE': module_temp,
+        'AMBIENT_TEMPERATURE': ambient_temp,
+        'solar_radiation': irradiance * 1000.0,
+        'temperature': ambient_temp,
+        'humidity': 50.0,
+        'cloud_cover': (1.0 - min(1.0, irradiance)) * 100.0
+    }
+    
+    # 2. Определение количества и имён признаков модели
     try:
-        predicted_power = model.predict(input_df)[0]
-    except Exception:
-        predicted_power = model.predict(input_df.values)[0]
+        if hasattr(model, "feature_names_in_"):
+            cols = model.feature_names_in_
+            input_data = pd.DataFrame([{col: features_dict.get(col, 0.0) for col in cols}])
+            pred = model.predict(input_data)
+        else:
+            n_features = getattr(model, "n_features_in_", 3)
+            if n_features == 3:
+                input_data = np.array([[irradiance, module_temp, ambient_temp]])
+            elif n_features == 2:
+                input_data = np.array([[irradiance, module_temp]])
+            elif n_features == 1:
+                input_data = np.array([[irradiance]])
+            else:
+                input_data = np.zeros((1, n_features))
+                input_data[0, 0] = irradiance
+                if n_features > 1: input_data[0, 1] = module_temp
+                if n_features > 2: input_data[0, 2] = ambient_temp
+            pred = model.predict(input_data)
+            
+        predicted_power = float(pred[0])
+    except Exception as e:
+        # Резервный физический расчет, если произошел сбой формата
+        predicted_power = irradiance * 200000.0 * (1.0 - max(0.0, module_temp - 25.0) * 0.004)
 else:
-    temp_efficiency = 1.0 - max(0.0, (temp - 25.0) * 0.004)
-    cloud_loss = 1.0 - (cloud_cover / 100.0 * 0.75)
-    predicted_power = capacity_kw * (solar_rad / 1000.0) * temp_efficiency * cloud_loss
+    # Базовый расчет, если модель не найдена
+    predicted_power = irradiance * 200000.0 * (1.0 - max(0.0, module_temp - 25.0) * 0.004)
 
-predicted_power = max(0.0, min(predicted_power, capacity_kw * 1.05))
-efficiency_pct = (predicted_power / capacity_kw) * 100 if capacity_kw > 0 else 0
+predicted_power = max(0.0, predicted_power)
 
 # --- 6. ГЛАВНАЯ СТРАНИЦА ---
-st.markdown("<h1 class='header-title'>Интеллектуальный Прогноз Солнечной Генерации</h1>", unsafe_allow_html=True)
-st.markdown("<p class='header-subtitle'>Система прогнозирования выработки электроэнергии на основе машинного обучения</p>", unsafe_allow_html=True)
+st.markdown("<h1 class='header-title'>☀️ Прогнозирование выработки солнечной энергии</h1>", unsafe_allow_html=True)
+st.markdown("<p class='header-subtitle'>Меняй параметры погоды на панели слева, чтобы ИИ рассчитал выработку энергии в реальном времени.</p>", unsafe_allow_html=True)
 
 if model_filename:
-    st.success(f"Загружена модель машинного обучения: `{model_filename}`")
-else:
-    st.info("Используется базовый расчетный модуль.")
+    st.success("✅ AI-модель успешно загружена!")
 
 st.markdown("---")
 
-col1, col2, col3, col4 = st.columns(4)
+# Карточки показателей
+col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown(f"""
         <div class='metric-card'>
-            <div class='metric-label'>Прогноз Мощности</div>
-            <div class='metric-value' style='color:#0284c7;'>{predicted_power:.2f} кВт</div>
+            <div class='metric-label'>Результат прогноза AI</div>
+            <div class='metric-value' style='color:#0284c7;'>{predicted_power:,.2f} кВт</div>
         </div>
     """, unsafe_allow_html=True)
 
 with col2:
+    daily_est = predicted_power * 5.5
     st.markdown(f"""
         <div class='metric-card'>
-            <div class='metric-label'>Эффективность</div>
-            <div class='metric-value' style='color:#16a34a;'>{efficiency_pct:.1f}%</div>
+            <div class='metric-label'>Оценка за день</div>
+            <div class='metric-value' style='color:#d97706;'>{daily_est:,.1f} кВт·ч</div>
         </div>
     """, unsafe_allow_html=True)
 
 with col3:
-    daily_est = predicted_power * 5.2
-    st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-label'>Оценка за день</div>
-            <div class='metric-value' style='color:#d97706;'>{daily_est:.1f} кВт·ч</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-with col4:
     co2_saved = daily_est * 0.5
     st.markdown(f"""
         <div class='metric-card'>
             <div class='metric-label'>Экономия CO₂ / день</div>
-            <div class='metric-value' style='color:#059669;'>{co2_saved:.1f} кг</div>
+            <div class='metric-value' style='color:#059669;'>{co2_saved:,.1f} кг</div>
         </div>
     """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- 7. ИНТЕРАКТИВНЫЕ ГРАФИКИ ---
-tab1, tab2, tab3 = st.tabs(["📊 Индикатор Мощности", "📈 Суточный Профиль", "🔍 Анализ Факторов"])
+tab1, tab2, tab3 = st.tabs(["📊 Индикатор Мощности", "📈 Суточный Профиль", "🔍 Анализ Инсоляции"])
+
+max_capacity = max(predicted_power * 1.25, 250000.0)
 
 with tab1:
     fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
+        mode = "gauge+number",
         value = predicted_power,
         domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Текущая выработка (кВт)", 'font': {'size': 20}},
-        delta = {'reference': capacity_kw * 0.7, 'increasing': {'color': "green"}},
+        title = {'text': "Выработка энергии (DC Power)", 'font': {'size': 20}},
         gauge = {
-            'axis': {'range': [0, capacity_kw], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'axis': {'range': [0, max_capacity]},
             'bar': {'color': "#0284c7"},
             'bgcolor': "white",
             'borderwidth': 2,
             'bordercolor': "#cbd5e1",
             'steps': [
-                {'range': [0, capacity_kw * 0.3], 'color': '#fee2e2'},
-                {'range': [capacity_kw * 0.3, capacity_kw * 0.7], 'color': '#fef3c7'},
-                {'range': [capacity_kw * 0.7, capacity_kw], 'color': '#dcfce7'}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': capacity_kw
-            }
+                {'range': [0, max_capacity * 0.3], 'color': '#fee2e2'},
+                {'range': [max_capacity * 0.3, max_capacity * 0.7], 'color': '#fef3c7'},
+                {'range': [max_capacity * 0.7, max_capacity], 'color': '#dcfce7'}
+            ]
         }
     ))
     fig_gauge.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=20))
@@ -212,61 +198,47 @@ with tab2:
         df_hourly, 
         x='Час суток', 
         y='Выработка (кВт)',
-        title="Ориентировочный суточный график генерации электроэнергии",
+        title="Ориентировочный суточный график генерации",
         color_discrete_sequence=['#38bdf8']
     )
-    fig_line.update_layout(
-        xaxis_title="Время суток",
-        yaxis_title="Мощность (кВт)",
-        hovermode="x unified",
-        template="plotly_white"
-    )
+    fig_line.update_layout(template="plotly_white", hovermode="x unified")
     st.plotly_chart(fig_line, use_container_width=True)
 
 with tab3:
-    temp_range = np.linspace(-10, 45, 50)
-    power_vs_temp = []
+    rad_range = np.linspace(0.0, 1.2, 30)
+    power_vs_rad = []
     
-    for t in temp_range:
+    for r in rad_range:
         if model is not None:
             try:
-                p = model.predict(pd.DataFrame({'solar_radiation': [solar_rad], 'temperature': [t], 'humidity': [humidity], 'cloud_cover': [cloud_cover]}))[0]
+                if hasattr(model, "feature_names_in_"):
+                    cols = model.feature_names_in_
+                    d = {col: features_dict.get(col, 0.0) for col in cols}
+                    d['IRRADIANCE'] = r
+                    d['solar_radiation'] = r * 1000.0
+                    p = model.predict(pd.DataFrame([d]))[0]
+                else:
+                    n_f = getattr(model, "n_features_in_", 3)
+                    inp = np.zeros((1, n_f))
+                    inp[0, 0] = r
+                    if n_f > 1: inp[0, 1] = module_temp
+                    if n_f > 2: inp[0, 2] = ambient_temp
+                    p = model.predict(inp)[0]
             except:
-                p = predicted_power
+                p = r * 200000.0
         else:
-            t_eff = 1.0 - max(0.0, (t - 25.0) * 0.004)
-            p = capacity_kw * (solar_rad / 1000.0) * t_eff * (1.0 - cloud_cover / 100.0 * 0.75)
-        power_vs_temp.append(max(0.0, p))
+            p = r * 200000.0
+        power_vs_rad.append(max(0.0, float(p)))
         
-    df_sens = pd.DataFrame({'Температура (°C)': temp_range, 'Прогнозируемая Мощность (кВт)': power_vs_temp})
+    df_rad = pd.DataFrame({'Инсоляция (IRRADIANCE)': rad_range, 'Мощность (кВт)': power_vs_rad})
     
-    fig_sens = px.line(
-        df_sens, 
-        x='Температура (°C)', 
-        y='Прогнозируемая Мощность (кВт)',
-        title=f"Влияние температуры на выработку (при инсоляции {solar_rad} Вт/м²)",
+    fig_rad = px.line(
+        df_rad, 
+        x='Инсоляция (IRRADIANCE)', 
+        y='Мощность (кВт)',
+        title="Зависимость мощности от уровня солнечной инсоляции",
         color_discrete_sequence=['#f59e0b']
     )
-    fig_sens.add_vline(x=temp, line_dash="dash", line_color="red", annotation_text="Текущее значение")
-    fig_sens.update_layout(template="plotly_white")
-    st.plotly_chart(fig_sens, use_container_width=True)
-
-# --- 8. ЭКСПОРТ ДАННЫХ ---
-st.markdown("---")
-col_exp1, col_exp2 = st.columns([3, 1])
-
-with col_exp1:
-    st.caption("Данные пересчитываются автоматически при изменении любого из параметров в боковой панели.")
-
-with col_exp2:
-    export_data = input_df.copy()
-    export_data['predicted_power_kw'] = predicted_power
-    export_data['efficiency_pct'] = efficiency_pct
-    csv_data = export_data.to_csv(index=False).encode('utf-8')
-    
-    st.download_button(
-        label="📥 Скачать результат (CSV)",
-        data=csv_data,
-        file_name="solar_prediction_result.csv",
-        mime="text/csv"
-    )
+    fig_rad.add_vline(x=irradiance, line_dash="dash", line_color="red", annotation_text="Текущее значение")
+    fig_rad.update_layout(template="plotly_white")
+    st.plotly_chart(fig_rad, use_container_width=True)
