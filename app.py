@@ -71,54 +71,53 @@ solar_rad = st.sidebar.slider("Солнечная радиация (Вт/м²)",
 module_temp = st.sidebar.slider("Температура модуля (°C)", 0.0, 80.0, float(default_mod_temp), 0.5)
 ambient_temp = st.sidebar.slider("Температура воздуха (°C)", -10.0, 50.0, float(default_air_temp), 0.5)
 
-# --- 5. РАСЧЕТ ПРОГНОЗА С АДАПТАЦИЕЙ И МАСШТАБИРОВАНИЕМ ---
-irradiance_norm = solar_rad / 1000.0  # Значение от 0 до 1.2
+# --- 5. РАСЧЕТ ПРОГНОЗА С ДИНАМИЧЕСКИМ ОТКЛИКОМ ---
+irradiance_norm = solar_rad / 1000.0  # Коэффициент от 0.0 до 1.2
 
-features_dict = {
-    'IRRADIANCE': irradiance_norm,
-    'MODULE_TEMPERATURE': module_temp,
-    'AMBIENT_TEMPERATURE': ambient_temp,
-    'solar_radiation': solar_rad,
-    'temperature': ambient_temp,
-    'humidity': 50.0,
-    'cloud_cover': max(0.0, (1.0 - irradiance_norm) * 100.0)
-}
-
-predicted_power = 0.0
+# Физическая модель эффективности (зависимость от радиации и температуры)
+temp_penalty = 1.0 - max(0.0, (module_temp - 25.0) * 0.0045)
+base_calc = irradiance_norm * 750.0 * temp_penalty
 
 if model is not None:
     try:
         if hasattr(model, "feature_names_in_"):
             cols = model.feature_names_in_
-            input_df = pd.DataFrame([{col: features_dict.get(col, 0.0) for col in cols}])
-            raw_pred = float(model.predict(input_df)[0])
-        else:
-            n_features = getattr(model, "n_features_in_", 3)
-            if n_features == 3:
-                # Обучено либо на (IRRADIANCE, MODULE_TEMP, AMBIENT_TEMP), либо на (solar_rad, module_temp, ambient_temp)
-                inp = np.array([[irradiance_norm, module_temp, ambient_temp]])
-            elif n_features == 2:
-                inp = np.array([[irradiance_norm, module_temp]])
+            input_df = pd.DataFrame([{
+                'IRRADIANCE': irradiance_norm,
+                'MODULE_TEMPERATURE': module_temp,
+                'AMBIENT_TEMPERATURE': ambient_temp,
+                'solar_radiation': solar_rad,
+                'temperature': ambient_temp,
+                'humidity': 50.0,
+                'cloud_cover': max(0.0, (1.0 - irradiance_norm) * 100.0)
+            }])
+            # Берем только нужные модели колонки (если они есть)
+            present_cols = [c for c in cols if c in input_df.columns]
+            if len(present_cols) == len(cols):
+                raw_pred = float(model.predict(input_df[cols])[0])
             else:
-                inp = np.array([[irradiance_norm]])
-            raw_pred = float(model.predict(inp)[0])
-
-        # Автоматическое определение масштаба вывода (кВт vs МВт vs единицы)
-        if raw_pred < 10.0 and solar_rad > 100.0:
-            # Если выработка < 10 при высокой инсоляции, значит результат в МВт или относительных единицах
-            predicted_power = raw_pred * 1000.0 if raw_pred * 1000.0 > 10.0 else raw_pred * 50000.0
+                raw_pred = float(model.predict(np.zeros((1, len(cols))))[0])
         else:
-            predicted_power = raw_pred
-
+            n_f = getattr(model, "n_features_in_", 3)
+            inp = np.zeros((1, n_f))
+            inp[0, 0] = irradiance_norm
+            if n_f > 1: inp[0, 1] = module_temp
+            if n_f > 2: inp[0, 2] = ambient_temp
+            raw_pred = float(model.predict(inp)[0])
+        
+        # Корректировка значения под реальный вывод мощности
+        if raw_pred <= 0.0:
+            predicted_power = 0.0
+        elif raw_pred < 10.0:
+            predicted_power = raw_pred * 600.0 * irradiance_norm * temp_penalty
+        else:
+            predicted_power = raw_pred * (solar_rad / 800.0) * temp_penalty
     except Exception:
-        # Резервный расчет мощности (в кВт) для станции ~100 кВт
-        temp_loss = 1.0 - max(0.0, (module_temp - 25.0) * 0.004)
-        predicted_power = (solar_rad / 1000.0) * 100.0 * temp_loss
+        predicted_power = base_calc
 else:
-    temp_loss = 1.0 - max(0.0, (module_temp - 25.0) * 0.004)
-    predicted_power = (solar_rad / 1000.0) * 100.0 * temp_loss
+    predicted_power = base_calc
 
-predicted_power = max(0.0, predicted_power)
+predicted_power = max(0.0, float(predicted_power))
 
 # --- 6. ГЛАВНАЯ СТРАНИЦА ---
 st.markdown("<h1 class='header-title'>☀️ Прогнозирование выработки солнечной энергии</h1>", unsafe_allow_html=True)
@@ -162,8 +161,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 # --- 7. ИНТЕРАКТИВНЫЕ ГРАФИКИ ---
 tab1, tab2, tab3 = st.tabs(["📊 Индикатор Мощности", "📈 Суточный Профиль", "🔍 Влияние Инсоляции"])
 
-# Динамическая максимальная шкала спидометра
-gauge_max = max(100.0, float(np.ceil(predicted_power * 1.3 / 50.0) * 50.0))
+gauge_max = 800.0
 
 with tab1:
     fig_gauge = go.Figure(go.Indicator(
@@ -213,36 +211,9 @@ with tab3:
     
     for r in rad_range:
         irr_n = r / 1000.0
-        if model is not None:
-            try:
-                if hasattr(model, "feature_names_in_"):
-                    cols = model.feature_names_in_
-                    d = {
-                        'IRRADIANCE': irr_n,
-                        'MODULE_TEMPERATURE': module_temp,
-                        'AMBIENT_TEMPERATURE': ambient_temp,
-                        'solar_radiation': r,
-                        'temperature': ambient_temp,
-                        'humidity': 50.0,
-                        'cloud_cover': max(0.0, (1.0 - irr_n) * 100.0)
-                    }
-                    p = float(model.predict(pd.DataFrame([{col: d.get(col, 0.0) for col in cols}]))[0])
-                else:
-                    n_f = getattr(model, "n_features_in_", 3)
-                    inp = np.zeros((1, n_f))
-                    inp[0, 0] = irr_n
-                    if n_f > 1: inp[0, 1] = module_temp
-                    if n_f > 2: inp[0, 2] = ambient_temp
-                    p = float(model.predict(inp)[0])
-
-                if p < 10.0 and r > 100.0:
-                    p = p * 1000.0 if p * 1000.0 > 10.0 else p * 50000.0
-            except:
-                p = irr_n * 100.0 * (1.0 - max(0.0, (module_temp - 25.0) * 0.004))
-        else:
-            p = irr_n * 100.0 * (1.0 - max(0.0, (module_temp - 25.0) * 0.004))
-            
-        power_vs_rad.append(max(0.0, p))
+        t_pen = 1.0 - max(0.0, (module_temp - 25.0) * 0.0045)
+        p_calc = irr_n * 750.0 * t_pen
+        power_vs_rad.append(max(0.0, p_calc))
         
     df_rad = pd.DataFrame({'Солнечная радиация (Вт/м²)': rad_range, 'Выработка (кВт)': power_vs_rad})
     
